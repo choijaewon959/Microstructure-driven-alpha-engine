@@ -3,3 +3,6 @@
 
 # configs
 .env
+
+
+.DS_store
