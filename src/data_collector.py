@@ -12,7 +12,7 @@ load_dotenv()
 API_KEY = os.getenv("POLYGON_API_KEY")
 
 
-def get_ohlcv(ticker: str, timespan: str, start: str, end: str):
+def get_ohlcv(ticker: str, timespan: str, start: str, end: str) -> list:
     client = RESTClient(API_KEY)
 
     aggs = []
@@ -185,7 +185,6 @@ def quotes_to_df(quotes) -> pd.DataFrame:
 
     # Choose best available timestamp
     if "sip_timestamp" in df.columns and df["sip_timestamp"].notna().any():
-        # Massive uses ns timestamps in examples
         df["ts"] = pd.to_datetime(df["sip_timestamp"], unit="ns", utc=True)
     elif "participant_timestamp" in df.columns and df["participant_timestamp"].notna().any():
         df["ts"] = pd.to_datetime(df["participant_timestamp"], unit="ns", utc=True)
@@ -245,17 +244,20 @@ def resample_nbbo_1s(df_state: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def collect_nbbo_data(tickers, start, end):
-    out = []
+def collect_nbbo_data(
+    tickers, 
+    start: str,
+    end: str
+):
     for ticker in tickers:
         quotes = get_nbbo(ticker, start, end)
         df_quotes = (
             quotes_to_df(quotes)
             .pipe(reconstruct_nbbo_state)
             .pipe(localize_to_eastern)
+            .pipe(filter_rth)
             .pipe(resample_nbbo_1s)
         )
-        out.append(df_quotes)
 
         prices_dir = DATA_DIR / "quotes"
         prices_dir.mkdir(parents=True, exist_ok=True)
@@ -270,15 +272,216 @@ def collect_nbbo_data(tickers, start, end):
         print("Saved:", out_fp)
 
 
+def get_trades(
+    ticker, 
+    start_date,
+    end_date
+) -> list:
+    """
+    start_date/end_date: 'YYYY-MM-DD'
+    """
+    client = RESTClient(API_KEY)
+
+    trades = []
+    for d in pd.date_range(start_date, end_date, inclusive='left'):
+        day = d.strftime("%Y-%m-%d")
+        print(f"Fetching {ticker} trades for {day}...")
+
+        for t in client.list_trades(
+            ticker=ticker,
+            timestamp=day,
+            order="asc",
+            sort="timestamp",
+            limit=50000
+        ):
+            trades.append(t)
+
+    return trades
+
+
+def trades_to_df(
+    trades, 
+    symbol: str, 
+    ts_preference: str = "sip"
+) -> pd.DataFrame:
+    """
+    trades: list/iterable of trade objects
+    ts_preference: "sip" or "participant"
+      - sip_timestamp: when SIP received trade
+      - participant_timestamp: when exchange generated trade
+    """
+
+    rows = []
+    for t in trades:
+        get = (lambda k, default=None: t.get(k, default)) if isinstance(t, dict) else (lambda k, default=None: getattr(t, k, default))
+
+        rows.append({
+            "symbol": symbol,
+            "price": get("price"),
+            "size": get("size"),
+
+            # timestamps (ns unix)
+            "sip_timestamp": get("sip_timestamp"),
+            "participant_timestamp": get("participant_timestamp"),
+            "trf_timestamp": get("trf_timestamp"),
+
+            # identifiers / ordering
+            "id": get("id"),
+            "sequence_number": get("sequence_number"),
+
+            # venue / meta
+            "exchange": get("exchange"),
+            "tape": get("tape"),
+            "trf_id": get("trf_id"),
+
+            # quality / filtering
+            "conditions": get("conditions"),
+            "correction": get("correction"),
+        })
+
+    df = pd.DataFrame(rows)
+
+    # numeric coercion
+    for col in ["price", "size", "sip_timestamp", "participant_timestamp", "trf_timestamp", 
+                "sequence_number", "exchange", "tape", "trf_id", "correction"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # normalize conditions to tuple (hashable / consistent)
+    if "conditions" in df.columns:
+        def _norm_conditions(x):
+            if x is None or (isinstance(x, float) and pd.isna(x)):
+                return tuple()
+            if isinstance(x, list):
+                return tuple(int(v) for v in x if v is not None)
+            if isinstance(x, (int, float)) and not pd.isna(x):
+                return (int(x),)
+            return tuple()
+        df["conditions"] = df["conditions"].map(_norm_conditions)
+    
+    # choose timestamp
+    if ts_preference.lower() == "participant" and df["participant_timestamp"].notna().any():
+        df["ts"] = pd.to_datetime(df["participant_timestamp"], unit="ns", utc=True)
+    elif df["sip_timestamp"].notna().any():
+        df["ts"] = pd.to_datetime(df["sip_timestamp"], unit="ns", utc=True)          
+    elif df["participant_timestamp"].notna().any():
+        df["ts"] = pd.to_datetime(df["participant_timestamp"], unit="ns", utc=True)
+    else:
+        raise ValueError("No usable timestamp field found (sip_timestamp / participant_timestamp).")
+
+    df = df.sort_values(["ts", "sequence_number"], kind="stable").reset_index(drop=True)
+    return df
+
+
+def clean_trades(
+    df: pd.DataFrame,
+    keep_only_uncorrected: bool = True,
+    drop_nonpositive: bool = True,
+    dedupe: bool = True,
+) -> pd.DataFrame:
+    """
+    - filters invalid price/size
+    - optionally removes corrected prints (correction != 0)
+    - robust de-duplication using (symbol, exchange, trf_id, id) since id is unique per that combo
+    """
+    # drop missing ts
+    df = df.dropna(subset=["ts"])
+
+    if drop_nonpositive:
+        if "price" in df.columns:
+            df = df[df["price"] > 0]
+        if "size" in df.columns:
+            df = df[df["size"] > 0]
+
+    if keep_only_uncorrected and "correction" in df.columns:
+        df = df[(df["correction"].isna()) | (df["correction"] == 0)]
+
+    if dedupe:
+        # Preferred dedupe keys
+        keys = [c for c in ["symbol", "exchange", "trf_id", "id"] if c in df.columns]
+        if "id" not in keys:
+            # fallback if some payload lacks id
+            keys = [c for c in ["symbol", "exchange", "sequence_number", "sip_timestamp", "participant_timestamp", "price", "size"] if c in df.columns]
+        df = df.drop_duplicates(subset=keys, keep="last")
+
+    df = df.sort_values(["ts", "sequence_number"], kind="stable").reset_index(drop=True)
+    return df
+
+
+def resample_trades_1s(
+    df_trades: pd.DataFrame
+) -> pd.DataFrame:
+    """
+    - resamples trades data at 1s interval
+    - enriches VWAP per second
+    """
+    df = df_trades.set_index("ts").sort_index()
+    
+    out = pd.DataFrame(index=df.resample("1s").size().index)
+    out["last"] = df["price"].resample("1s").last()
+    out["volume"] = df["size"].resample("1s").sum().fillna(0)
+    out["n_trades"] = df["size"].resample("1s").count().fillna(0).astype(int)
+
+    # VWAP per second
+    dollar = (df["price"] * df["size"]).resample("1s").sum()
+    vol = df["size"].resample("1s").sum()
+    out["vwap"] = (dollar / vol.replace(0, np.nan))
+
+    # keep symbol
+    sym = None
+    if "symbol" in df.columns:
+        sym_series = df["symbol"].dropna()
+        sym = sym_series.iloc[0] if len(sym_series) else None
+    if sym is not None:
+        out["symbol"] = sym
+
+    out.index.name = "ts"
+    return out
+
+
+def collect_trades_data(
+    tickers: str,
+    start: str,
+    end: str,
+    ts_preference: str = "sip"
+):
+    for ticker in tickers:
+        trades = get_trades(ticker, start, end)
+        df = (
+            trades_to_df(trades, ticker, ts_preference=ts_preference)
+            .pipe(clean_trades)
+            .pipe(localize_to_eastern)
+            .pipe(filter_rth)
+            .pipe(resample_trades_1s)
+        )
+
+        trades_dir = DATA_DIR / "trades"
+        trades_dir.mkdir(parents=True, exist_ok=True)
+
+        out_fp = trades_dir / f"{ticker}_trades_1s_{start}_{end}.parquet"
+        df.index.name = "ts"
+        df.reset_index().to_parquet(
+            out_fp,
+            engine="pyarrow",
+            compression="zstd"
+        )
+
+        print("Saved:", out_fp)
+
+
+
 if __name__ == "__main__":
     # query params
-    tickers = ["SPY", "IVV", "GS", "MS"]
+    tickers = [  "GS", "MS", "SPY", "IVV"]
     timespan = "second"
-    start = "2025-02-01"
-    end = "2025-02-28"
+    start = "2025-06-01"
+    end = "2025-06-30"
 
     # ohlcv
-    collect_price_data(tickers, timespan, start, end)
+    # collect_price_data(tickers, timespan, start, end)
 
     # nbbo
-    collect_nbbo_data(tickers, start, end)
+    # collect_nbbo_data(tickers, start, end)
+
+    # trades
+    collect_trades_data(tickers, start, end)
