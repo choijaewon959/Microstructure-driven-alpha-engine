@@ -472,16 +472,16 @@ def collect_trades_data(
 
 if __name__ == "__main__":
     # query params
-    tickers = [  "GS", "MS", "SPY", "IVV"]
+    tickers = ["GS", "MS", "SPY", "IVV"]
     timespan = "second"
     start = "2025-06-01"
     end = "2025-06-30"
 
     # ohlcv
-    # collect_price_data(tickers, timespan, start, end)
+    collect_price_data(tickers, timespan, start, end)
 
     # nbbo
-    # collect_nbbo_data(tickers, start, end)
+    collect_nbbo_data(tickers, start, end)
 
     # trades
     collect_trades_data(tickers, start, end)
