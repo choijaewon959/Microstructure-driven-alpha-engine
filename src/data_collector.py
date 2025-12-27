@@ -12,10 +12,18 @@ load_dotenv()
 API_KEY = os.getenv("POLYGON_API_KEY")
 
 
-def get_ohlcv(ticker: str, timespan: str, start: str, end: str) -> list:
+def get_ohlcv(
+    ticker: str,
+    timespan: str,
+    date: str
+) -> list:
     client = RESTClient(API_KEY)
 
     aggs = []
+    print(f"Fetching {ticker} prices for {date}...")
+    start = date
+    end = (pd.Timestamp(date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
     for a in client.list_aggs(
         ticker,
         1,
@@ -109,32 +117,36 @@ def reindex_1s(df: pd.DataFrame) -> pd.DataFrame:
 
 def collect_price_data(tickers, timespan, start, end):
     for ticker in tickers:
-        print(f"Fetching {ticker} price for {start} to {end}...")
+        for d in pd.date_range(start, end, inclusive='left'):
+            date = d.strftime("%Y-%m-%d")
+            aggs = get_ohlcv(ticker, timespan, date)
+            if aggs:
+                df = (
+                    parse_aggs(aggs, ticker)
+                    .pipe(localize_to_eastern)
+                    .pipe(filter_rth)
+                    .pipe(finalize_bars)
+                    .pipe(reindex_1s)
+                )
 
-        aggs = get_ohlcv(ticker, timespan, start, end)
-        df = (
-            parse_aggs(aggs, ticker)
-            .pipe(localize_to_eastern)
-            .pipe(filter_rth)
-            .pipe(finalize_bars)
-            .pipe(reindex_1s)
-        )
+                prices_dir = DATA_DIR / "prices"
+                prices_dir.mkdir(parents=True, exist_ok=True)
 
-        prices_dir = DATA_DIR / "prices"
-        prices_dir.mkdir(parents=True, exist_ok=True)
+                out_fp = prices_dir / f"{ticker}_1s_{date}.parquet"
+                df.index.name = "ts"
+                df.reset_index().to_parquet(
+                    out_fp,
+                    engine="pyarrow",
+                    compression="zstd"
+                )
 
-        out_fp = prices_dir / f"{ticker}_1s_{start}_{end}.parquet"
-        df.index.name = "ts"
-        df.reset_index().to_parquet(
-            out_fp,
-            engine="pyarrow",
-            compression="zstd"
-        )
-
-        print("Saved:", out_fp)
+                print("Saved:", out_fp)
 
 
-def get_nbbo(ticker: str, start_date: str, end_date: str) -> list:
+def get_nbbo(
+    ticker: str, 
+    date: str
+) -> list:
     """
     start_date/end_date: 'YYYY-MM-DD'
     end_date is exclusive (standard Python range style)
@@ -142,18 +154,16 @@ def get_nbbo(ticker: str, start_date: str, end_date: str) -> list:
     client = RESTClient(API_KEY)
 
     all_quotes = []
-    for d in pd.date_range(start_date, end_date, inclusive="left"):
-        day = d.strftime("%Y-%m-%d")
-        print(f"Fetching {ticker} quotes for {day}...")
+    print(f"Fetching {ticker} quotes for {date}...")
 
-        for q in client.list_quotes(
-            ticker=ticker,
-            timestamp=day,       
-            order="asc",
-            sort="timestamp",
-            limit=50000,
-        ):
-            all_quotes.append(q)
+    for q in client.list_quotes(
+        ticker=ticker,
+        timestamp=date,       
+        order="asc",
+        sort="timestamp",
+        limit=50000,
+    ):
+        all_quotes.append(q)
 
     return all_quotes
 
@@ -245,37 +255,39 @@ def resample_nbbo_1s(df_state: pd.DataFrame) -> pd.DataFrame:
 
 
 def collect_nbbo_data(
-    tickers, 
+    tickers: str, 
     start: str,
     end: str
 ):
     for ticker in tickers:
-        quotes = get_nbbo(ticker, start, end)
-        df_quotes = (
-            quotes_to_df(quotes)
-            .pipe(reconstruct_nbbo_state)
-            .pipe(localize_to_eastern)
-            .pipe(filter_rth)
-            .pipe(resample_nbbo_1s)
-        )
+        for d in pd.date_range(start, end, inclusive='left'):
+            date = d.strftime("%Y-%m-%d")
+            quotes = get_nbbo(ticker, date)
+            if quotes:
+                df_quotes = (
+                    quotes_to_df(quotes)
+                    .pipe(reconstruct_nbbo_state)
+                    .pipe(localize_to_eastern)
+                    .pipe(filter_rth)
+                    .pipe(resample_nbbo_1s)
+                )
 
-        prices_dir = DATA_DIR / "quotes"
-        prices_dir.mkdir(parents=True, exist_ok=True)
+                prices_dir = DATA_DIR / "quotes"
+                prices_dir.mkdir(parents=True, exist_ok=True)
 
-        out_fp = prices_dir / f"{ticker}_quotes_1s_{start}_{end}.parquet"
-        df_quotes.reset_index().to_parquet(
-            out_fp,
-            engine="pyarrow",
-            compression="zstd"
-        )
+                out_fp = prices_dir / f"{ticker}_quotes_1s_{date}.parquet"
+                df_quotes.reset_index().to_parquet(
+                    out_fp,
+                    engine="pyarrow",
+                    compression="zstd"
+                )
 
-        print("Saved:", out_fp)
+                print("Saved:", out_fp)
 
 
 def get_trades(
-    ticker, 
-    start_date,
-    end_date
+    ticker: str, 
+    date: str
 ) -> list:
     """
     start_date/end_date: 'YYYY-MM-DD'
@@ -283,18 +295,16 @@ def get_trades(
     client = RESTClient(API_KEY)
 
     trades = []
-    for d in pd.date_range(start_date, end_date, inclusive='left'):
-        day = d.strftime("%Y-%m-%d")
-        print(f"Fetching {ticker} trades for {day}...")
+    print(f"Fetching {ticker} trades for {date}...")
 
-        for t in client.list_trades(
-            ticker=ticker,
-            timestamp=day,
-            order="asc",
-            sort="timestamp",
-            limit=50000
-        ):
-            trades.append(t)
+    for t in client.list_trades(
+        ticker=ticker,
+        timestamp=date,
+        order="asc",
+        sort="timestamp",
+        limit=50000
+    ):
+        trades.append(t)
 
     return trades
 
@@ -446,36 +456,40 @@ def collect_trades_data(
     ts_preference: str = "sip"
 ):
     for ticker in tickers:
-        trades = get_trades(ticker, start, end)
-        df = (
-            trades_to_df(trades, ticker, ts_preference=ts_preference)
-            .pipe(clean_trades)
-            .pipe(localize_to_eastern)
-            .pipe(filter_rth)
-            .pipe(resample_trades_1s)
-        )
+        for d in pd.date_range(start, end, inclusive='left'):
+            date = d.strftime("%Y-%m-%d")
+            trades = get_trades(ticker, date)
+            if trades:
+                df = (
+                    trades_to_df(trades, ticker, ts_preference=ts_preference)
+                    .pipe(clean_trades)
+                    .pipe(localize_to_eastern)
+                    .pipe(filter_rth)
+                    .pipe(resample_trades_1s)
+                )
 
-        trades_dir = DATA_DIR / "trades"
-        trades_dir.mkdir(parents=True, exist_ok=True)
+                trades_dir = DATA_DIR / "trades"
+                trades_dir.mkdir(parents=True, exist_ok=True)
 
-        out_fp = trades_dir / f"{ticker}_trades_1s_{start}_{end}.parquet"
-        df.index.name = "ts"
-        df.reset_index().to_parquet(
-            out_fp,
-            engine="pyarrow",
-            compression="zstd"
-        )
+                out_fp = trades_dir / f"{ticker}_trades_1s_{date}.parquet"
+                df.index.name = "ts"
+                df.reset_index().to_parquet(
+                    out_fp,
+                    engine="pyarrow",
+                    compression="zstd"
+                )
 
-        print("Saved:", out_fp)
+                print("Saved:", out_fp)
 
 
 
 if __name__ == "__main__":
     # query params
     tickers = ["GS", "MS", "SPY", "IVV"]
+    # tickers = ["SPY",]
     timespan = "second"
-    start = "2025-06-01"
-    end = "2025-06-30"
+    start = "2025-04-01"
+    end = "2025-04-30"
 
     # ohlcv
     collect_price_data(tickers, timespan, start, end)
