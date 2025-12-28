@@ -486,10 +486,9 @@ def collect_trades_data(
 if __name__ == "__main__":
     # query params
     tickers = ["GS", "MS", "SPY", "IVV"]
-    # tickers = ["SPY",]
     timespan = "second"
-    start = "2025-04-01"
-    end = "2025-04-30"
+    start = "2025-06-01"
+    end = "2025-06-30"
 
     # ohlcv
     collect_price_data(tickers, timespan, start, end)
