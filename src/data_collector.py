@@ -491,10 +491,10 @@ if __name__ == "__main__":
     end = "2025-06-30"
 
     # ohlcv
-    # collect_price_data(tickers, timespan, start, end)
+    collect_price_data(tickers, timespan, start, end)
 
-    # # nbbo
-    # collect_nbbo_data(tickers, start, end)
+    # nbbo
+    collect_nbbo_data(tickers, start, end)
 
     # trades
     collect_trades_data(tickers, start, end)
