@@ -2,7 +2,7 @@ from models import Position, Fill
 
 
 class Portfolio:
-    def __init__(self, initial_cash, currency: str = 'USD'):
+    def __init__(self, initial_cash: int | float = 1_000_000, currency: str = 'USD'):
         self.start_cash = initial_cash
         self.cash = initial_cash
         self.positions = {}  # symbol -> Position
@@ -124,7 +124,7 @@ class Portfolio:
             pos.qty = new_qty
             # pos.avg_px stays the same
     
-    def stats(self) -> dict:
+    def snapshot(self) -> dict:
         """
         Return current snapshot of portfolio state
         """
