@@ -1,7 +1,8 @@
 import pandas as pd
 import numpy as np
+from collections import deque
 from abc import ABC, abstractmethod
-from models import QuoteEvent, TradeEvent, MarketState, UnknownEventError 
+from models import QuoteEvent, TradeEvent, MarketState, UnknownEventError, UnknownSymbolError
 from typing import Any, Dict
 
 
@@ -100,7 +101,7 @@ class MicrostructureModule(FeatureModule):
         n_trades = int(ms.trade.n_trades or 0)
         last = _safe_float(ms.trade.last, np.nan)
         vwap  = _safe_float(ms.trade.vwap, 0.0)
-        
+
         return {
             "symbol": symbol,
             f"{self.prefix}_has_quote": has_quote,
@@ -118,34 +119,138 @@ class MicrostructureModule(FeatureModule):
             f"{self.prefix}_last": last,
             f"{self.prefix}_vwap_proxy": vwap,
         }
+    
+
+class RVModule(FeatureModule):
+    def __init__(
+        self,
+        prefix: str = "RV",
+        stocks: list[str] = [],
+        market: str = "SPY",
+        window: int = 300,
+    ):
+        self.prefix = prefix
+        self.stocks = stocks
+        self.market = market
+        self.window = window
+
+        # rolling mid buffers per symbol
+        self.mid_hist: Dict[str, deque] = {
+            s: deque(maxlen=window + 1) for s in [market] + self.stocks
+        }
+
+        # latest snapshot of rv
+        self._latest: Dict[str, Any] = {}
+
+    def on_event(
+        self, 
+        event: QuoteEvent | TradeEvent,
+        ms: MarketState
+    ) -> None:
+        # symbol fallback
+        symbol = ms.quote.symbol or ms.trade.symbol
+
+        # quotes
+        b   = _safe_float(ms.quote.bid, np.nan)
+        a   = _safe_float(ms.quote.ask, np.nan)
+
+        has_quote = not (np.isnan(b) or np.isnan(a))
+        if has_quote:
+            mid = 0.5 * (b + a)
+        else:
+            mid = np.nan
+
+        # update historical mid
+        if symbol not in self.mid_hist:
+            self.mid_hist[symbol] = deque(maxlen=self.window + 1)
+
+        self.mid_hist[symbol].append(mid)
+
+        # compute relative value
+        if all(len(self.mid_hist[sym]) >= self.window + 1 for sym in self.mid_hist):
+            self._compute_rv()
+
+    def _compute_log_ret(
+        self,
+        sym: str
+    ) -> float:
+        px = np.asarray(self.mid_hist[sym], dtype=float)
+        return np.diff(np.log(px))
+    
+    def _ols_alpha_beta(
+        self,
+        y: np.ndarray,
+        x: np.ndarray
+    ) -> tuple[float, float]:
+        x_bar, y_bar = x.mean(), y.mean()
+        dx = x - x_bar
+        dy = y - y_bar
+        
+        var_x = (dx * dx).mean()
+        if var_x < 1e-12:
+            return 0.0, 0.0
+        
+        cov_xy = (dx * dy).mean()
+        b = cov_xy / (var_x + 1e-12)
+        a = y_bar - b * x_bar
+        return a, b
+
+    def _compute_rv(
+        self,
+    ) -> None:
+        r_m = self._compute_log_ret(self.market)[-self.window:]
+        var_m = r_m.var(ddof=1)
+        if var_m < 1e-10:
+            return
+        
+        out: Dict[str, Dict[str, Any]] = {}
+        for s in self.stocks:
+            r = self._compute_log_ret(s)[-self.window:]
+            alpha, beta = self._ols_alpha_beta(r_m, r)
+            
+            epsilon = r - (alpha + beta * r_m)
+            sigma_eps = epsilon.std(ddof=1)
+            z = float(epsilon[-1] / (sigma_eps + 1e-12)) if sigma_eps > 1e-12 else 0.0
+
+            out[s] = {
+                "mid": self.mid_hist[s],
+                "market_mid": self.mid_hist[self.market],
+                "beta": beta,
+                "eps": float(epsilon[-1]),
+                "z": z
+            }
+
+        self._latest = out
+
+    def snapshot(self, ms: MarketState) -> Dict[str, Any]:
+        return self._latest
 
 
 class CompositeFeatureEngine:
-    def __init__(
-        self, 
-        market_state: MarketState, 
-        modules: list[FeatureModule]
-    ) -> None:
-        self.ms = market_state
+    def __init__(self, modules: list[FeatureModule]) -> None:
         self.updater = MarketStateUpdater()
         self.modules = modules
+        self.ms_by_symbol: Dict[str, MarketState] = {}
 
-    def on_event(
-        self,
-        event: QuoteEvent | TradeEvent,
-    ) -> Dict[str, Any]:
-        # 1) update raw state once
-        self.updater.apply(self.ms, event)
+    def on_event(self, event: QuoteEvent | TradeEvent) -> Dict[str, Any]:
+        sym = event.symbol
+        ms = self.ms_by_symbol.setdefault(sym, MarketState())
 
-        # 2) let each module update its rolling memory (if any)
+        # 1) update raw state for THIS symbol only
+        self.updater.apply(ms, event)
+
+        # 2) update rolling state per module (module can manage per-symbol memory)
         for m in self.modules:
-            m.on_event(event, self.ms)
+            m.on_event(event, ms)
 
-        # 3) produce a unified feature snapshot
+        # 3) snapshot features
         feats: Dict[str, Any] = {}
         for m in self.modules:
-            feats.update(m.snapshot(self.ms))
+            feats.update(m.snapshot(ms))
 
         return feats
+
+    def market_state(self, symbol: str) -> MarketState:
+        return self.ms_by_symbol.setdefault(symbol, MarketState())
 
 

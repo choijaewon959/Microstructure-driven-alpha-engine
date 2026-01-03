@@ -93,3 +93,7 @@ class Fill:
 class UnknownEventError(Exception):
     """Unknown event type error."""
     pass
+
+class UnknownSymbolError(Exception):
+    """Unexpected symbol type error."""
+    pass
