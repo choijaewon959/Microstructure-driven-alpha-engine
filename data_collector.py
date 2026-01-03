@@ -5,7 +5,7 @@ from massive import RESTClient
 from dotenv import load_dotenv
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve()
 DATA_DIR = BASE_DIR.parent / "data"
 
 load_dotenv()
@@ -168,7 +168,7 @@ def get_nbbo(
     return all_quotes
 
 
-def quotes_to_df(quotes) -> pd.DataFrame:
+def quotes_to_df(symbol: str, quotes: pd.DataFrame) -> pd.DataFrame:
     """
     quotes: list/iterable of quote objects (or dicts) from client.list_quotes(...)
     Returns a raw DataFrame with best-effort column extraction.
@@ -179,6 +179,7 @@ def quotes_to_df(quotes) -> pd.DataFrame:
         get = (lambda k, default=None: q.get(k, default)) if isinstance(q, dict) else (lambda k, default=None: getattr(q, k, default))
 
         rows.append({
+            "symbol": symbol,
             "sip_timestamp": get("sip_timestamp"),
             "participant_timestamp": get("participant_timestamp"),
             "sequence_number": get("sequence_number"),
@@ -246,7 +247,7 @@ def resample_nbbo_1s(df_state: pd.DataFrame) -> pd.DataFrame:
     """
     df = df_state.copy().set_index("ts").sort_index()
 
-    keep_cols = ["bid_price", "ask_price", "bid_size", "ask_size", "mid", "spread", "imbalance_l1", "microprice", "microprice_dev"]
+    keep_cols = ["symbol", "bid_price", "ask_price", "bid_size", "ask_size", "mid", "spread", "imbalance_l1", "microprice", "microprice_dev"]
     keep_cols = [c for c in keep_cols if c in df.columns]
 
     out = df[keep_cols].resample("1s").last().ffill()
@@ -265,7 +266,7 @@ def collect_nbbo_data(
             quotes = get_nbbo(ticker, date)
             if quotes:
                 df_quotes = (
-                    quotes_to_df(quotes)
+                    quotes_to_df(ticker, quotes)
                     .pipe(reconstruct_nbbo_state)
                     .pipe(localize_to_eastern)
                     .pipe(filter_rth)
@@ -485,16 +486,16 @@ def collect_trades_data(
 
 if __name__ == "__main__":
     # query params
-    tickers = ["GS", "MS", "SPY", "IVV"]
+    tickers = [ "IVV"]
     timespan = "second"
     start = "2025-06-01"
     end = "2025-06-30"
 
     # ohlcv
-    collect_price_data(tickers, timespan, start, end)
+    # collect_price_data(tickers, timespan, start, end)
 
     # nbbo
     collect_nbbo_data(tickers, start, end)
 
     # trades
-    collect_trades_data(tickers, start, end)
+    # collect_trades_data(tickers, start, end)
