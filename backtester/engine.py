@@ -77,11 +77,7 @@ class Engine:
             sig: List[Signal] = self.strategy.generate_signals(features, self.portfolio.snapshot())
             if sig:
                 sigs.append(sig)
-        
-        print(len(sigs))
-            
-
-
+                    
 
 if __name__ == "__main__":
     # build engine

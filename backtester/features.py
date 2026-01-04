@@ -200,6 +200,7 @@ class RVModule(FeatureModule):
         cov_xy = (dx * dy).mean()
         b = cov_xy / (var_x + EPS)
         a = y_bar - b * x_bar
+        
         return a, b
 
     def _compute_rv(
@@ -309,6 +310,7 @@ class CompositeFeatureEngine:
         feats: Dict[str, Any] = {}
         for m in self.modules:
             feats.update(m.snapshot())
+
         return feats
 
     def close(self) -> Optional[Dict[str, Any]]:

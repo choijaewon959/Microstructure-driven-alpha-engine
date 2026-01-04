@@ -101,6 +101,9 @@ class RVStrategy(Strategy):
         # @TODO: update size determination
         self.base_size = 50
 
+        # @TODO: Erase
+        self.signals = []
+
     def generate_signals(
         self, 
         features: dict,
