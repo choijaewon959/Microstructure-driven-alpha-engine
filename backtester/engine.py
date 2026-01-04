@@ -42,9 +42,9 @@ class Engine:
             pd.concat([quotes_e, trades_e], axis=0)
             .sort_index()  # assumes ts is index
         )
-
+        
+        sigs = []
         for ts, row in events.iterrows():
-
             # 1) apply fills due at ts
             due = [f for f in self.pending_fills if f.ts == ts]
             for fill in due:
@@ -55,14 +55,13 @@ class Engine:
             if row["event_type"] == "quote":
                 qe = QuoteEvent(
                     ts=ts,
-                    symbol=row["q_symbol"],   # or row["symbol"] depending on your schema
+                    symbol=row["q_symbol"],
                     bid=row["q_bid_price"],
                     ask=row["q_ask_price"],
                     bsz=row["q_bid_size"],
                     asz=row["q_ask_size"],
                 )
                 features = self.preprocessor.on_event(qe)
-
             else:
                 te = TradeEvent(
                     ts=ts,
@@ -74,8 +73,11 @@ class Engine:
                 )
                 features = self.preprocessor.on_event(te)
 
-                # 3. generate signal
-                sigs: List[Signal] = self.strategy.generate_signals(features, self.portfolio.snapshot())
+            # 3. generate signal
+            sig: List[Signal] = self.strategy.generate_signals(features, self.portfolio.snapshot())
+            if sig:
+                sigs.append(sig)
+                    
 
 if __name__ == "__main__":
     # build engine
@@ -83,7 +85,7 @@ if __name__ == "__main__":
     # strategy = MicrostructureStrategy()
 
     modules =[RVModule(prefix="RV", stocks=["MS"])]
-    feature_engine = CompositeFeatureEngine(modules)
+    feature_engine = CompositeFeatureEngine(modules, ["SPY", "MS"])
 
     engine = Engine(
         feature_engine,
@@ -114,10 +116,11 @@ if __name__ == "__main__":
     q_spy['symbol'] = ticker
     t_spy['symbol'] = ticker
 
-    q = pd.concat([q_s, q_spy])
+    ts = q_s.index.intersection(q_spy.index)
+    q = pd.concat([q_s, q_spy]).loc[ts]
     q.sort_index(inplace=True)
     
-    t = pd.concat([t_s, t_spy])
+    t = pd.concat([t_s, t_spy]).loc[ts]
     t.sort_index(inplace=True)
 
     # run

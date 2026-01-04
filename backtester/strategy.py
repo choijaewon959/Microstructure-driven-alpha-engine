@@ -58,7 +58,7 @@ class MicrostructureStrategy(Strategy):
         sig = (microprice - mid) / max(spread, 1e-9)
         sym = features['symbol']
 
-        # 2) cost gate (simple version)
+        # 2) cost gate (simplified)
         taker_fee = 0.0005   # $0.0005/share = 0.05 cents
         maker_fee = -0.0001  # small rebate example (optional)
 
@@ -101,11 +101,17 @@ class RVStrategy(Strategy):
         # @TODO: update size determination
         self.base_size = 50
 
+        # @TODO: Erase
+        self.signals = []
+
     def generate_signals(
         self, 
         features: dict,
         portfolio_state: dict,
     ) -> List[Signal]:
+        if not features:
+            return []
+        
         out: List[Signal] = []
         for sym, info in features.items():
             z = info.get("z")
@@ -143,6 +149,6 @@ class RVStrategy(Strategy):
             urgency = min(1.0, abs(z) / self.z_enter)
             out.append(Signal(sym, target, "taker", urgency))
             out.append(Signal(self.market, hedge_target, "taker", urgency))
-
+        
         return out
 
