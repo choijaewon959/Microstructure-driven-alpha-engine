@@ -111,7 +111,7 @@ class RVStrategy(Strategy):
             z = info.get("z")
             beta = info.get("beta")
             mid = info.get("mid")
-            market_mid = info.get("market_mid")
+            market_mid = info.get("mid_market")
 
             if not z:
                 continue 
@@ -141,9 +141,8 @@ class RVStrategy(Strategy):
             )
 
             urgency = min(1.0, abs(z) / self.z_enter)
-            out.append(Signal(sym, target, urgency))
-            out.append(Signal(self.market, hedge_target, urgency))
-            print(out)
+            out.append(Signal(sym, target, "taker", urgency))
+            out.append(Signal(self.market, hedge_target, "taker", urgency))
 
         return out
 

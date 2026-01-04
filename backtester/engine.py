@@ -73,7 +73,7 @@ class Engine:
                     vwap=row["t_vwap"],
                 )
                 features = self.preprocessor.on_event(te)
-                print('features', features)
+
                 # 3. generate signal
                 sigs: List[Signal] = self.strategy.generate_signals(features, self.portfolio.snapshot())
 
@@ -100,10 +100,10 @@ if __name__ == "__main__":
     quotes_fp = BASE / "quotes" / f"{ticker}_quotes_1s_{date}.parquet"
     prices_fp = BASE / "prices" / f"{ticker}_1s_{date}.parquet"
     trades_fp = BASE / "trades" / f"{ticker}_trades_1s_{date}.parquet"
-    q_gs = pd.read_parquet(quotes_fp).set_index('ts').add_prefix("q_")
-    t_gs = pd.read_parquet(trades_fp).set_index('ts').add_prefix("t_")
-    q_gs['symbol'] = ticker
-    t_gs['symbol'] = ticker
+    q_s = pd.read_parquet(quotes_fp).set_index('ts').add_prefix("q_")
+    t_s = pd.read_parquet(trades_fp).set_index('ts').add_prefix("t_")
+    q_s['symbol'] = ticker
+    t_s['symbol'] = ticker
 
     ticker = "SPY"
     quotes_fp = BASE / "quotes" / f"{ticker}_quotes_1s_{date}.parquet"
@@ -114,10 +114,10 @@ if __name__ == "__main__":
     q_spy['symbol'] = ticker
     t_spy['symbol'] = ticker
 
-    q = pd.concat([q_gs, q_spy])
+    q = pd.concat([q_s, q_spy])
     q.sort_index(inplace=True)
     
-    t = pd.concat([t_gs, t_spy])
+    t = pd.concat([t_s, t_spy])
     t.sort_index(inplace=True)
 
     # run

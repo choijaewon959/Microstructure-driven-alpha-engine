@@ -206,15 +206,15 @@ class RVModule(FeatureModule):
         out: Dict[str, Dict[str, Any]] = {}
         for s in self.stocks:
             r = self._compute_log_ret(s)[-self.window:]
-            alpha, beta = self._ols_alpha_beta(r_m, r)
-            
+            alpha, beta = self._ols_alpha_beta(r, r_m)            
             epsilon = r - (alpha + beta * r_m)
             sigma_eps = epsilon.std(ddof=1)
             z = float(epsilon[-1] / (sigma_eps + 1e-12)) if sigma_eps > 1e-12 else 0.0
-
+            
             out[s] = {
-                "mid": self.mid_hist[s],
-                "market_mid": self.mid_hist[self.market],
+                "mid": self.mid_hist[s][-1],
+                "mid_market": self.mid_hist[self.market][-1],
+                "alpha": alpha,
                 "beta": beta,
                 "eps": float(epsilon[-1]),
                 "z": z
@@ -222,17 +222,26 @@ class RVModule(FeatureModule):
 
         self._latest = out
 
-    def snapshot(self, ms: MarketState) -> Dict[str, Any]:
+    def snapshot(
+        self,
+        ms: MarketState
+    ) -> Dict[str, Any]:
         return self._latest
 
 
 class CompositeFeatureEngine:
-    def __init__(self, modules: list[FeatureModule]) -> None:
+    def __init__(
+        self,
+        modules: list[FeatureModule]
+    ):
         self.updater = MarketStateUpdater()
         self.modules = modules
         self.ms_by_symbol: Dict[str, MarketState] = {}
 
-    def on_event(self, event: QuoteEvent | TradeEvent) -> Dict[str, Any]:
+    def on_event(
+        self,
+        event: QuoteEvent | TradeEvent
+    ) -> Dict[str, Any]:
         sym = event.symbol
         ms = self.ms_by_symbol.setdefault(sym, MarketState())
 
