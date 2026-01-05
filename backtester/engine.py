@@ -165,8 +165,6 @@ class Engine:
             
             # 6) optional logging row (features + nav)
             rec = {"ts": ts, "nav": self.portfolio.nav()}
-            # If features is {sym: {...}} (RV), flatten it for debug:
-            # Keep it simple: store raw features dict
             rec["features"] = features
             records.append(rec)
 
