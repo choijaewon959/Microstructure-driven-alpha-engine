@@ -71,11 +71,11 @@ class MarketState:
 @dataclass
 class Position:
     symbol: str
-    qty: float
-    avg_px: float
-    realized_pnl: float
-    unrealized_pnl: float
-    last_mark: float        # last mid price 
+    qty: float = 0.0
+    avg_px: float = 0.0
+    realized_pnl: float = 0.0
+    unrealized_pnl: float = 0.0
+    last_mark: float = np.nan  # last mid price
 
 
 @dataclass

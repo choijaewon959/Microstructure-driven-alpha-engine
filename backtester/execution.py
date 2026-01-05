@@ -12,7 +12,7 @@ class ExecutionSimulator:
         self,
         latency: int | pd.Timedelta = 1,
         exec_style: Literal["taker", "maker"] = "taker",
-        fee_per_share: float = 0.01,
+        fee_per_share: float = 0.001,
     ):
         if isinstance(latency, int):
             latency = pd.Timedelta(milliseconds=latency)
@@ -26,7 +26,9 @@ class ExecutionSimulator:
         ts: pd.Timestamp,
         symbol: str,
         order_qty: float,
-        row: pd.Series
+        row: pd.Series,
+        style: str,
+        urgency: float,
     ) -> list[Fill]:
 
         if order_qty == 0:

@@ -319,6 +319,11 @@ class CompositeFeatureEngine:
             return None
         
         return self._flush_bar(self._cur_ts)
+    
+    def market_states(
+        self,
+    ) -> MarketState:
+        return self.ms_by_symbol
 
 
 

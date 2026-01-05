@@ -1,5 +1,5 @@
 from models import Position, Fill
-
+import numpy as np
 
 class Portfolio:
     def __init__(self, initial_cash: int | float = 1_000_000, currency: str = 'USD'):
@@ -18,34 +18,35 @@ class Portfolio:
         self.history_net = []
 
     def mark_to_market(self, ts, marks: dict[str, float]):
-        """
-        ts: pd.Timestamp
-        marks: {symbol: mark_price}  (usually mid price)
-        """
         gross = 0.0
         net = 0.0
         unrealized_total = 0.0
+        realized_total = sum(p.realized_pnl for p in self.positions.values())
 
         for symbol, pos in self.positions.items():
-            if symbol not in marks:
-                continue  # cannot mark without price
+            # update mark if provided, else keep previous
+            if symbol in marks:
+                mark = float(marks[symbol])
+                if np.isfinite(mark):
+                    pos.last_mark = mark
 
-            mark = marks[symbol]
-            pos.last_mark = mark
+            # if still no valid mark, skip valuation for this position
+            if pos.last_mark is None or (isinstance(pos.last_mark, float) and not np.isfinite(pos.last_mark)):
+                continue
 
-            # unrealized PnL
-            pos.unrealized_pnl = pos.qty * (mark - pos.avg_px)
+            mark = float(pos.last_mark)
 
-            gross += abs(pos.qty * mark)
-            net += pos.qty * mark
-            unrealized_total += pos.unrealized_pnl
+            pos.unrealized_pnl = float(pos.qty) * (mark - float(pos.avg_px))
 
-        equity = self.cash + unrealized_total + sum(p.realized_pnl for p in self.positions.values())
+            gross += abs(float(pos.qty) * mark)
+            net += float(pos.qty) * mark
+            unrealized_total += float(pos.unrealized_pnl)
 
-        # record history
+        equity = float(self.cash) + unrealized_total + realized_total
+
         self.history_ts.append(ts)
         self.history_equity.append(equity)
-        self.history_cash.append(self.cash)
+        self.history_cash.append(float(self.cash))
         self.history_gross.append(gross)
         self.history_net.append(net)
 
@@ -76,6 +77,9 @@ class Portfolio:
 
         # turnover
         self.turnover += abs(qf) * px
+
+        # last mark to execution price
+        pos.last_mark = px
 
         # If no existing position, this fill opens a new one
         if q0 == 0:
@@ -124,30 +128,59 @@ class Portfolio:
             pos.qty = new_qty
             # pos.avg_px stays the same
     
+    def nav(self) -> float:
+        """
+        Net Asset Value (equity) = cash + sum(qty * last_mark)
+        """
+        equity = float(self.cash)
+        for p in self.positions.values():
+            px = getattr(p, "last_mark", None)
+            if px is None or (isinstance(px, float) and not np.isfinite(px)):
+                continue
+            equity += float(p.qty) * float(px)
+        return float(equity)
+
     def snapshot(self) -> dict:
         """
         Return current snapshot of portfolio state
         """
+        gross_exposure = 0.0
+        net_exposure = 0.0
+        num_positions = 0
 
-        gross_exposure = sum(
-            abs(p.qty) * p.last_mark
-            for p in self.positions.values()
-        )
+        for p in self.positions.values():
+            qty = float(p.qty)
+            px = getattr(p, "last_mark", None)
+            if px is None or (isinstance(px, float) and not np.isfinite(px)):
+                continue
 
-        net_exposure = sum(
-            p.qty * p.last_mark
-            for p in self.positions.values()
-        )
+            px = float(px)
+            gross_exposure += abs(qty) * px
+            net_exposure += qty * px
+            if qty != 0:
+                num_positions += 1
 
-        equity = self.cash + net_exposure
+        equity = self.nav()  # single source of truth
 
         return {
-            "cash": self.cash,
-            "equity": equity,
-            "gross_exposure": gross_exposure,
-            "net_exposure": net_exposure,
-            "num_positions": sum(1 for p in self.positions.values() if p.qty != 0),
+            "cash": float(self.cash),
+            "nav": float(equity),
+            "gross_exposure": float(gross_exposure),
+            "net_exposure": float(net_exposure),
+            "num_positions": int(num_positions),
         }
+    
+    def positions_snapshot(
+        self
+    ) -> dict[str, int]:
+        """
+        Symbol → current position quantity
+        """
+        return {
+            sym: p.qty
+            for sym, p in self.positions.items()
+        }
+
 
 
             

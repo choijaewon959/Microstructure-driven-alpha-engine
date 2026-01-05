@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List
 import pandas as pd
+import numpy as np
 
 
 @dataclass(frozen=True)
@@ -99,56 +100,58 @@ class RVStrategy(Strategy):
         self.z_exit = z_exit
         
         # @TODO: update size determination
-        self.base_size = 50
+        self.base_size = 5000
 
         # @TODO: Erase
         self.signals = []
 
-    def generate_signals(
-        self, 
-        features: dict,
-        portfolio_state: dict,
-    ) -> List[Signal]:
+    def generate_signals(self, features: dict, portfolio_state: dict) -> List[Signal]:
         if not features:
             return []
-        
+
         out: List[Signal] = []
+        spy_target_total = 0
+        urgency_max = 0.0
+
         for sym, info in features.items():
-            z = info.get("z")
-            beta = info.get("beta")
-            mid = info.get("mid")
-            market_mid = info.get("mid_market")
+            z = info.get("z", None)
+            beta = info.get("beta", None)
+            mid = info.get("mid", None)
+            market_mid = info.get("mid_market", None)
 
-            if not z:
-                continue 
+            if z is None or beta is None or mid is None or market_mid is None:
+                continue
+            if not (np.isfinite(z) and np.isfinite(beta) and np.isfinite(mid) and np.isfinite(market_mid)):
+                continue
+            if mid <= 0 or market_mid <= 0:
+                continue
 
-            current_qty = portfolio_state.get(sym, 0)
+            current_qty = int(portfolio_state.get(sym, 0))
+            target = None
 
-            # Entry
             if current_qty == 0:
-                if z > self.z_enter:
-                    # rich → short
+                if z >= self.z_enter:
                     target = -self.base_size
-                elif z < -self.z_enter:
-                    # cheap → long
+                elif z <= -self.z_enter:
                     target = +self.base_size
                 else:
                     continue
-            # Exit
             else:
-                if abs(z) < self.z_exit:
+                if abs(z) <= self.z_exit:
                     target = 0
                 else:
                     continue  # hold
-            
-            # Dollar-neutral hedge using beta
-            hedge_target = int(
-                - beta * target * (mid / market_mid)
-            )
 
-            urgency = min(1.0, abs(z) / self.z_enter)
-            out.append(Signal(sym, target, "taker", urgency))
-            out.append(Signal(self.market, hedge_target, "taker", urgency))
-        
+            hedge_target = int(round(-beta * target * (mid / market_mid)))
+            spy_target_total += hedge_target
+
+            urgency = min(1.0, abs(z) / (self.z_enter + 1e-12))
+            urgency_max = max(urgency_max, urgency)
+
+            out.append(Signal(sym, int(target), "taker", urgency))
+
+        if out:
+            out.append(Signal(self.market, int(spy_target_total), "taker", urgency_max))
+
         return out
 
