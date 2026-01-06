@@ -232,8 +232,8 @@ class RVModule(FeatureModule):
             alpha, beta = self._ols_alpha_beta(r, r_m)
             eps = r - (alpha + beta * r_m)
 
-            # series = np.cumsum(eps) if self.use_cum_residual else eps
-            series = eps
+            # cumsum on epsilon for price level divergence and persistent drift
+            series = np.cumsum(eps)
             mu = series.mean()
             sd = series.std(ddof=1)
 

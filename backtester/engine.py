@@ -23,6 +23,7 @@ class Engine:
         self.exec_sim = exec_sim
         self.pending_fills = []
         self.last_mid: Dict[str, float] = {}
+        self.exec_count = 0
 
     def _apply_due_fills(
         self,
@@ -62,8 +63,7 @@ class Engine:
         ts: pd.Timestamp,
         signals: List[Any]
     ) -> None:
-        port_state = self.portfolio.snapshot()
-
+        port_state = self.portfolio.positions_snapshot()
         for s in signals:
             sym = s.symbol
             target = int(s.target_pos)
@@ -75,11 +75,11 @@ class Engine:
             ms = self.preprocessor.market_states().get(sym)
             b = float(ms.quote.bid) if ms.quote.bid is not None else np.nan
             a = float(ms.quote.ask) if ms.quote.ask is not None else np.nan
+
             if not (np.isfinite(b) and np.isfinite(a)):
                 continue
 
             exec_row = {"q_bid_price": b, "q_ask_price": a}
-
             new_fills = self.exec_sim.generate_fills(
                 ts=ts,
                 symbol=sym,
@@ -164,7 +164,7 @@ class Engine:
                 self._execute_signals(ts, signals)
             
             # 6) optional logging row (features + nav)
-            rec = {"ts": ts, "nav": self.portfolio.nav()}
+            rec = {"ts": ts, "nav": self.portfolio.nav(), "snapshot": self.portfolio.positions_snapshot()}
             rec["features"] = features
             records.append(rec)
 
@@ -181,55 +181,64 @@ class Engine:
                 if signals:
                     self._execute_signals(ts_last, signals)
                 
-                records.append({"ts": ts_last, "nav": self.portfolio.nav(), "features": last})
+                records.append({"ts": ts_last, "nav": self.portfolio.nav(), "snapshot": self.portfolio.positions_snapshot(), "features": last})
 
         return pd.DataFrame(records)
 
 
 if __name__ == "__main__":
-    # build engine
-    # modules = [MicrostructureModule()]
-    # strategy = MicrostructureStrategy()
+    start = '2025-06-01'
+    end = '2025-06-30'
 
-    modules =[RVModule(prefix="RV", stocks=["MS"])]
-    feature_engine = CompositeFeatureEngine(modules, ["SPY", "MS"])
+    for d in pd.date_range(start, end):
+        try:
+            date = d.strftime("%Y-%m-%d")
 
-    engine = Engine(
-        feature_engine,
-        RVStrategy(),
-        Portfolio(),
-        ExecutionSimulator()
-    )
+            # build engine
+            strategy_name = "RV"
+            modules =[RVModule(prefix=strategy_name, stocks=["MS"])]
+            feature_engine = CompositeFeatureEngine(modules, ["SPY", "MS"])
 
-    # get data
-    BASE = Path("../data")
-    ticker = "MS"
-    date = '2025-06-02'
+            engine = Engine(
+                feature_engine,
+                RVStrategy(),
+                Portfolio(),
+                ExecutionSimulator()
+            )
 
-    quotes_fp = BASE / "quotes" / f"{ticker}_quotes_1s_{date}.parquet"
-    prices_fp = BASE / "prices" / f"{ticker}_1s_{date}.parquet"
-    trades_fp = BASE / "trades" / f"{ticker}_trades_1s_{date}.parquet"
-    q_s = pd.read_parquet(quotes_fp).set_index('ts').add_prefix("q_")
-    t_s = pd.read_parquet(trades_fp).set_index('ts').add_prefix("t_")
-    q_s['symbol'] = ticker
-    t_s['symbol'] = ticker
+            # get data
+            BASE = Path("../data")
+            ticker = "MS"
 
-    ticker = "SPY"
-    quotes_fp = BASE / "quotes" / f"{ticker}_quotes_1s_{date}.parquet"
-    prices_fp = BASE / "prices" / f"{ticker}_1s_{date}.parquet"
-    trades_fp = BASE / "trades" / f"{ticker}_trades_1s_{date}.parquet"
-    q_spy = pd.read_parquet(quotes_fp).set_index('ts').add_prefix("q_")
-    t_spy = pd.read_parquet(trades_fp).set_index('ts').add_prefix("t_")
-    q_spy['symbol'] = ticker
-    t_spy['symbol'] = ticker
+            quotes_fp = BASE / "quotes" / f"{ticker}_quotes_1s_{date}.parquet"
+            prices_fp = BASE / "prices" / f"{ticker}_1s_{date}.parquet"
+            trades_fp = BASE / "trades" / f"{ticker}_trades_1s_{date}.parquet"
+            q_s = pd.read_parquet(quotes_fp).set_index('ts').add_prefix("q_")
+            t_s = pd.read_parquet(trades_fp).set_index('ts').add_prefix("t_")
+            q_s['symbol'] = ticker
+            t_s['symbol'] = ticker
 
-    ts = q_s.index.intersection(q_spy.index)
-    q = pd.concat([q_s, q_spy]).loc[ts]
-    q.sort_index(inplace=True)
-    
-    t = pd.concat([t_s, t_spy]).loc[ts]
-    t.sort_index(inplace=True)
+            ticker = "SPY"
+            quotes_fp = BASE / "quotes" / f"{ticker}_quotes_1s_{date}.parquet"
+            prices_fp = BASE / "prices" / f"{ticker}_1s_{date}.parquet"
+            trades_fp = BASE / "trades" / f"{ticker}_trades_1s_{date}.parquet"
+            q_spy = pd.read_parquet(quotes_fp).set_index('ts').add_prefix("q_")
+            t_spy = pd.read_parquet(trades_fp).set_index('ts').add_prefix("t_")
+            q_spy['symbol'] = ticker
+            t_spy['symbol'] = ticker
 
-    # run
-    records = engine.run(q, t)
-    print(records)
+            ts = q_s.index.intersection(q_spy.index)
+            q = pd.concat([q_s, q_spy]).loc[ts]
+            q.sort_index(inplace=True)
+            
+            t = pd.concat([t_s, t_spy]).loc[ts]
+            t.sort_index(inplace=True)
+
+            # run
+            print(f"Running backtester engine for date {date}...")
+            records = engine.run(q, t)
+
+            # save result
+            records.to_csv(f"../results/{strategy_name}_{date}.csv")
+        except:
+            print(f"Cannot run backtest for date {date}...")

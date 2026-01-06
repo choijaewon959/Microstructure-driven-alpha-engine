@@ -30,7 +30,6 @@ class ExecutionSimulator:
         style: str,
         urgency: float,
     ) -> list[Fill]:
-
         if order_qty == 0:
             return []
 

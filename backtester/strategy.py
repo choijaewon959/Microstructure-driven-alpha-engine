@@ -100,10 +100,7 @@ class RVStrategy(Strategy):
         self.z_exit = z_exit
         
         # @TODO: update size determination
-        self.base_size = 5000
-
-        # @TODO: Erase
-        self.signals = []
+        self.base_size = 1000
 
     def generate_signals(self, features: dict, portfolio_state: dict) -> List[Signal]:
         if not features:
