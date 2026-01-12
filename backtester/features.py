@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import statsmodels.api as sm
 from collections import deque
 from abc import ABC, abstractmethod
 from models import QuoteEvent, TradeEvent, MarketState, UnknownEventError, UnknownSymbolError
@@ -232,8 +233,8 @@ class RVModule(FeatureModule):
             alpha, beta = self._ols_alpha_beta(r, r_m)
             eps = r - (alpha + beta * r_m)
 
-            # cumsum on epsilon for price level divergence and persistent drift
-            series = np.cumsum(eps)
+            # series = np.cumsum(eps) if self.use_cum_residual else eps
+            series = eps
             mu = series.mean()
             sd = series.std(ddof=1)
 
@@ -253,6 +254,143 @@ class RVModule(FeatureModule):
             }
 
         self._latest = out
+
+    def snapshot(
+        self,
+    ) -> Dict[str, Any]:
+        return self._latest
+
+
+class FactorNeutralRVModule(FeatureModule):
+    """
+    Regress stocks on predefined factors, calculate the spread of epsilon (z-value).
+    """
+    def __init__(
+        self,
+        prefix: str = "FNRV",
+        stocks: List[str] = ["MS", "GS"],
+        factors: List[str] = ["SPY", "XLF"],
+        window: int = 30,   
+        rolling_ols_window: int = 60
+    ):
+        """
+            Docstring for __init__
+            
+            :param prefix: name of the module
+            :type prefix: str
+            :param stocks: y
+            :type stocks: List[str]
+            :param factors: x
+            :type factors: List[str]
+            :param window: y which the returns are calculated
+            :type window: int
+            :param rolling_ols_window: used to calculate beta and alpha
+            :type rolling_ols_window: int
+        """
+        self.prefix = prefix
+        self.stocks = stocks or []
+        self.factors = factors
+        self.window = window
+        self.symbols = stocks + factors
+        self.rolling_ols_window = rolling_ols_window
+
+        # rolling mid buffers per symbol: (window+1) sized prices -> (window) sized returns
+        self.mid_hist: Dict[str, deque] = {s: deque(maxlen=rolling_ols_window+1) for s in self.symbols}
+        self._latest: Dict[str, Any] = {}
+
+    def on_bar(
+        self,
+        ts: pd.Timestamp,
+        ms_by_symbol: Dict[str, MarketState]
+    ) -> None:
+        # append one aligned sample per ts for ALL symbols
+        for sym in self.symbols:
+            ms = ms_by_symbol.get(sym)
+            if ms is None:
+                self.mid_hist[sym].append(np.nan)
+                continue
+
+            b = _safe_float(ms.quote.bid, np.nan)
+            a = _safe_float(ms.quote.ask, np.nan)
+            has_quote = not (np.isnan(b) or np.isnan(a))
+            mid = 0.5 * (b + a) if has_quote else np.nan
+            self.mid_hist[sym].append(mid)
+
+        # compute only if everyone has window+1 prices (=> window returns)
+        if all(len(self.mid_hist[s]) >= self.window for s in self.symbols):
+            self._compute_eps_spread(ts)
+    
+    def _compute_eps_spread(
+        self, 
+        ts: pd.Timestamp
+    ) -> None:
+        # rolling returns
+        df_px = pd.DataFrame(self.mid_hist)
+        px_f = df_px.loc[:, self.factors].astype(float)
+        px_s = df_px.loc[:, self.stocks].astype(float)
+        r_f = np.log(px_f).diff(self.window).dropna()
+        r_s = np.log(px_s).diff(self.window).dropna()   
+
+        if len(r_f) < self.rolling_ols_window:
+            return
+        
+        r_f = r_f[-self.rolling_ols_window:]
+        r_s = r_s[-self.rolling_ols_window:]
+
+        # not worth calculating spread if return did not move meaningfully
+        if np.var(r_f, ddof=1) < 1e-10:
+            return
+
+        df_eps = pd.DataFrame()        
+        for s in self.stocks:
+            y = r_s[s]
+            x = sm.add_constant(r_f)
+
+            res = sm.OLS(y, x).fit()
+            beta = res.params
+            y_hat = x @ beta
+            df_eps[s] = y - y_hat
+
+        # calculate eps spread
+        df_eps["eps_spread"] = df_eps[self.stocks].iloc[:, 0] - df_eps[self.stocks].iloc[:, 1]
+        
+        # calculate window length for z based on half life (using AR(1))
+        x = df_eps['eps_spread'].dropna()
+        x = x - x.mean()
+        df_ar = pd.concat({"y": x, "xlag": x.shift(1)}, axis=1).dropna()
+        if len(df_ar) < 20:  # guardrail
+            return
+        
+        res = sm.OLS(df_ar["y"], sm.add_constant(df_ar["xlag"])).fit()
+        phi = res.params["xlag"]
+
+        if not (0 < phi < 1):
+            return
+        
+        half_life = -np.log(2) / np.log(phi)
+        z_score_factor = 4 # @TODO: come up with better estimates
+        z_window = int(max(10, round(half_life) * z_score_factor))  # clamp to avoid tiny windows
+
+        # avoid look ahead bias by shifting 1
+        mu = df_eps['eps_spread'].rolling(z_window).mean().shift(1)
+        sd = df_eps['eps_spread'].rolling(z_window).std(ddof=1).shift(1)
+
+        df_eps['s_z'] = (df_eps['eps_spread'] - mu) / sd
+        df_eps.dropna(inplace=True)
+
+
+        # latest scalar z at current time (not the whole Series)
+        z_now = df_eps["s_z"].iloc[-1]
+
+        self._latest = {
+            "ts": ts,
+            "eps_z_score": z_now,
+            "z_type": "eps",
+            "half_life": float(half_life),
+            "W": self.window,
+            "W_beta": self.rolling_ols_window,
+            "z_window": z_window,
+        }
 
     def snapshot(
         self,
