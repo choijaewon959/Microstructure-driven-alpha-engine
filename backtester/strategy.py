@@ -152,3 +152,51 @@ class RVStrategy(Strategy):
 
         return out
 
+class FactorNeutralPairsTradingStrategy(Strategy):
+    def __init__(
+        self,
+        stocks: str = ["GS", "MS"], # order should be matching with stocks of features module
+        z_enter: float = 2.0,
+        z_exit: float = 0.5
+    ):
+        self.stocks = stocks
+        self.z_enter = z_enter
+        self.z_exit = z_exit
+        
+        # @TODO: update size determination
+        self.base_size = 1000
+    
+    def generate_signals(
+        self, 
+        features: dict, 
+        portfolio_state: dict,
+    ) -> List[Signal]:
+        if not features:
+            return []
+        
+        out: List[Signal] = []
+
+        z = features.get("eps_z_score", None)
+        w = features.get("W", None)
+        current_qty = int(sum(portfolio_state.values()))
+        target = None
+        
+        if current_qty == 0:
+            if z >= self.z_enter:
+                target = -self.base_size
+            elif z <= -self.z_enter:
+                target = +self.base_size
+            else:
+                return []
+        else:
+            if abs(z) <= self.z_exit:
+                target = 0
+            else:
+                return []
+        
+        urgency = min(1.0, abs(z) / (self.z_enter + 1e-12))
+        out.append(Signal(self.stocks[0], int(target), "taker", urgency))
+        out.append(Signal(self.stocks[1], -int(target), "taker", urgency))
+        
+        return out
+        
