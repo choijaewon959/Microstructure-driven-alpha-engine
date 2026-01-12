@@ -268,7 +268,7 @@ class FactorNeutralRVModule(FeatureModule):
     def __init__(
         self,
         prefix: str = "FNRV",
-        stocks: List[str] = ["MS", "GS"],
+        stocks: List[str] = ["GS", "MS"],
         factors: List[str] = ["SPY", "XLF"],
         window: int = 30,   
         rolling_ols_window: int = 60
@@ -377,7 +377,6 @@ class FactorNeutralRVModule(FeatureModule):
 
         df_eps['s_z'] = (df_eps['eps_spread'] - mu) / sd
         df_eps.dropna(inplace=True)
-
 
         # latest scalar z at current time (not the whole Series)
         z_now = df_eps["s_z"].iloc[-1]
